@@ -51,7 +51,7 @@ pub const DEFAULT_GRACE_PERIOD: i64 = 14 * SECONDS_PER_DAY;
 /// Constant declaring that there is no ETA of the transaction.
 pub const NO_ETA: i64 = -1;
 
-declare_id!("GokivDYuQXPZCWRkwMhdH2h91KpDQXBEmpgBgs55bnpH");
+declare_id!("5y9CzUaXKLij3bAZd1muTQhg6wA71wBUEu1e31p9zJqb");
 
 #[program]
 /// Goki smart wallet program.
@@ -144,6 +144,25 @@ pub mod smart_wallet {
         instructions: Vec<TXInstruction>,
     ) -> ProgramResult {
         create_transaction_with_timelock(ctx, bump, instructions, NO_ETA)
+    }
+
+    /// Appends instructions to [Transaction].instructions slice.
+    pub fn append_transaction(
+        ctx: Context<AppendTransaction>,
+        bump: u8,
+        instructions: Vec<TXInstruction>,
+    ) -> ProgramResult {
+        let smart_wallet = &mut ctx.accounts.smart_wallet;
+        smart_wallet.num_transactions = unwrap_int!(smart_wallet.num_transactions.checked_add(1));
+
+        require!(ctx.accounts.transaction.bump == bump, InvalidBump);
+
+        let mut tx = ctx.accounts.transaction.instructions.clone();
+        let mut ixs_vec = instructions.clone();
+        tx.append(&mut ixs_vec);
+
+        ctx.accounts.transaction.instructions = tx;
+        Ok(())
     }
 
     /// Creates a new [Transaction] account with time delay.
@@ -382,6 +401,35 @@ pub struct Auth<'info> {
     pub smart_wallet: Account<'info, SmartWallet>,
 }
 
+/// Accounts for [smart_wallet:append_transaction].
+#[derive(Accounts)]
+#[instruction(bump: u8, instructions: Vec<TXInstruction>)]
+pub struct AppendTransaction<'info> {
+    /// The [SmartWallet].
+    #[account(mut)]
+    pub smart_wallet: Account<'info, SmartWallet>,
+    /// The [Transaction].
+    #[account(
+        init,
+        seeds = [
+            b"GokiTransaction".as_ref(),
+            smart_wallet.key().to_bytes().as_ref(),
+            smart_wallet.num_transactions.to_le_bytes().as_ref()
+        ],
+        bump = bump,
+        payer = payer,
+        space = Transaction::space(instructions),
+    )]
+    pub transaction: Account<'info, Transaction>,
+    /// One of the owners. Checked in the handler via [SmartWallet::owner_index].
+    pub proposer: Signer<'info>,
+    /// Payer to create the [Transaction].
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    /// The [System] program.
+    pub system_program: Program<'info, System>,
+}
+
 /// Accounts for [smart_wallet::create_transaction].
 #[derive(Accounts)]
 #[instruction(bump: u8, instructions: Vec<TXInstruction>)]
@@ -507,4 +555,6 @@ pub enum ErrorCode {
     OwnerSetChanged,
     #[msg("Subaccount does not belong to smart wallet.")]
     SubaccountOwnerMismatch,
+    #[msg("Invalid bump seed.")]
+    InvalidBump,
 }
