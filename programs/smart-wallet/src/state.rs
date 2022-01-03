@@ -69,16 +69,6 @@ pub struct Transaction {
     pub executed_at: i64,
 }
 
-impl Transaction {
-    /// Computes the space a [Transaction] uses.
-    pub fn space(instructions: Vec<TXInstruction>) -> usize {
-        4  // Anchor discriminator
-            + std::mem::size_of::<Transaction>()
-            + 4 // Vec discriminator
-            + (instructions.iter().map(|ix| ix.space()).sum::<usize>())
-    }
-}
-
 /// Instruction.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, Default, PartialEq)]
 pub struct TXInstruction {
@@ -96,6 +86,21 @@ impl TXInstruction {
         std::mem::size_of::<Pubkey>()
             + (self.keys.len() as usize) * std::mem::size_of::<TXAccountMeta>()
             + (self.data.len() as usize)
+    }
+}
+
+impl Transaction {
+    /// Computes the space a [Transaction] uses.
+    pub fn new(size: usize) -> usize {
+        std::mem::size_of::<Transaction>() * size
+    }
+    /// Computes the space a [Transaction] uses.
+    pub fn space(buffer_size: u8) -> usize {
+        4  // Anchor discriminator
+            + std::mem::size_of::<Transaction>()
+            + 4 // Vec discriminator
+            + Transaction::new(buffer_size.into())
+            // + (instructions.iter().map(|ix| ix.space()).sum::<usize>())
     }
 }
 

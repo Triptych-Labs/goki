@@ -25,6 +25,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program;
 use anchor_lang::Key;
 use std::convert::Into;
+use std::vec::Vec;
 use vipers::invariant;
 use vipers::unwrap_int;
 use vipers::unwrap_or_err;
@@ -51,7 +52,7 @@ pub const DEFAULT_GRACE_PERIOD: i64 = 14 * SECONDS_PER_DAY;
 /// Constant declaring that there is no ETA of the transaction.
 pub const NO_ETA: i64 = -1;
 
-declare_id!("5y9CzUaXKLij3bAZd1muTQhg6wA71wBUEu1e31p9zJqb");
+declare_id!("AqQCUzA9EWMthbFMSUW3d5JPuNe1eLRCwLMS5CwDRS3D");
 
 #[program]
 /// Goki smart wallet program.
@@ -141,27 +142,68 @@ pub mod smart_wallet {
     pub fn create_transaction(
         ctx: Context<CreateTransaction>,
         bump: u8,
-        instructions: Vec<TXInstruction>,
+        buffer_size: u8,
+        blank_xact: TXInstruction,
     ) -> ProgramResult {
-        create_transaction_with_timelock(ctx, bump, instructions, NO_ETA)
+        let smart_wallet = &mut ctx.accounts.smart_wallet;
+        let tx = &mut ctx.accounts.transaction;
+        tx.smart_wallet = smart_wallet.key();
+        tx.bump = bump;
+
+        let mut buffer: Vec<TXInstruction> = Vec::new();
+        buffer.resize(buffer_size.try_into().unwrap(), blank_xact);
+        tx.instructions = buffer;
+        smart_wallet.num_transactions = unwrap_int!(smart_wallet.num_transactions.checked_add(1));
+
+        // generate the signers boolean list
+        let owners = &smart_wallet.owners;
+        let mut signers = Vec::new();
+        let owner_index = smart_wallet.owner_index(ctx.accounts.proposer.key())?;
+        signers.resize(owners.len(), false);
+        signers[owner_index] = true;
+        
+        // init the TX
+        let index = smart_wallet.num_transactions;
+        let tx = &mut ctx.accounts.transaction;
+        tx.smart_wallet = smart_wallet.key();
+        tx.index = index;
+        tx.bump = bump;
+
+        tx.proposer = ctx.accounts.proposer.key();
+        tx.signers = signers;
+        tx.owner_set_seqno = smart_wallet.owner_set_seqno;
+        tx.eta = NO_ETA;
+
+        tx.executor = Pubkey::default();
+        tx.executed_at = -1;
+
+
+
+        msg!("Buffered account for {:?} ixs", tx.instructions.len());
+        Ok(())
     }
 
     /// Appends instructions to [Transaction].instructions slice.
     pub fn append_transaction(
         ctx: Context<AppendTransaction>,
         bump: u8,
-        instructions: Vec<TXInstruction>,
+        instructions: TXInstruction,
+        index: u64,
     ) -> ProgramResult {
         let smart_wallet = &mut ctx.accounts.smart_wallet;
-        smart_wallet.num_transactions = unwrap_int!(smart_wallet.num_transactions.checked_add(1));
-
         require!(ctx.accounts.transaction.bump == bump, InvalidBump);
 
+        /*
         let mut tx = ctx.accounts.transaction.instructions.clone();
         let mut ixs_vec = instructions.clone();
         tx.append(&mut ixs_vec);
+        */
+        let id: usize = index.try_into().unwrap();
+        ctx.accounts.transaction.instructions[id] = instructions;
 
-        ctx.accounts.transaction.instructions = tx;
+        smart_wallet.num_transactions = unwrap_int!(smart_wallet.num_transactions.checked_add(1));
+
+        msg!("Buffered account for {:?} ixs", smart_wallet.num_transactions);
         Ok(())
     }
 
@@ -234,6 +276,7 @@ pub mod smart_wallet {
             .accounts
             .smart_wallet
             .owner_index(ctx.accounts.owner.key())?;
+        msg!("Signers len {:?}", ctx.accounts.transaction.signers);
         ctx.accounts.transaction.signers[owner_index] = true;
 
         emit!(TransactionApproveEvent {
@@ -406,33 +449,17 @@ pub struct Auth<'info> {
 #[instruction(bump: u8, instructions: Vec<TXInstruction>)]
 pub struct AppendTransaction<'info> {
     /// The [SmartWallet].
-    #[account(mut)]
     pub smart_wallet: Account<'info, SmartWallet>,
     /// The [Transaction].
-    #[account(
-        init,
-        seeds = [
-            b"GokiTransaction".as_ref(),
-            smart_wallet.key().to_bytes().as_ref(),
-            smart_wallet.num_transactions.to_le_bytes().as_ref()
-        ],
-        bump = bump,
-        payer = payer,
-        space = Transaction::space(instructions),
-    )]
-    pub transaction: Account<'info, Transaction>,
-    /// One of the owners. Checked in the handler via [SmartWallet::owner_index].
-    pub proposer: Signer<'info>,
-    /// Payer to create the [Transaction].
     #[account(mut)]
-    pub payer: Signer<'info>,
-    /// The [System] program.
-    pub system_program: Program<'info, System>,
+    pub transaction: Account<'info, Transaction>,
+    /// One of the smart_wallet owners. Checked in the handler.
+    pub owner: Signer<'info>,
 }
 
 /// Accounts for [smart_wallet::create_transaction].
 #[derive(Accounts)]
-#[instruction(bump: u8, instructions: Vec<TXInstruction>)]
+#[instruction(bump: u8, buffer_size: u8)]
 pub struct CreateTransaction<'info> {
     /// The [SmartWallet].
     #[account(mut)]
@@ -447,7 +474,7 @@ pub struct CreateTransaction<'info> {
         ],
         bump = bump,
         payer = payer,
-        space = Transaction::space(instructions),
+        space = Transaction::space(buffer_size),
     )]
     pub transaction: Account<'info, Transaction>,
     /// One of the owners. Checked in the handler via [SmartWallet::owner_index].
