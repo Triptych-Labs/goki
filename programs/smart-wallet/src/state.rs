@@ -81,6 +81,10 @@ pub struct TXInstruction {
 }
 
 impl TXInstruction {
+    /// Computes the space a [Transaction] uses.
+    pub fn blank(&self, size: usize) -> usize {
+        TXInstruction::space(self) * size
+    }
     /// Space that a [TXInstruction] takes up.
     pub fn space(&self) -> usize {
         std::mem::size_of::<Pubkey>()
@@ -95,12 +99,12 @@ impl Transaction {
         std::mem::size_of::<Transaction>() * size
     }
     /// Computes the space a [Transaction] uses.
-    pub fn space(buffer_size: u8) -> usize {
+    pub fn space(blank_xacts: Vec<TXInstruction>) -> usize {
         4  // Anchor discriminator
             + std::mem::size_of::<Transaction>()
             + 4 // Vec discriminator
-            + Transaction::new(buffer_size.into())
-            // + (instructions.iter().map(|ix| ix.space()).sum::<usize>())
+            // + blank_xact.space()
+            + (blank_xacts.iter().map(|ix| ix.space()).sum::<usize>())
     }
 }
 

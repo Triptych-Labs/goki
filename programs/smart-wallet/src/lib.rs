@@ -143,7 +143,8 @@ pub mod smart_wallet {
         ctx: Context<CreateTransaction>,
         bump: u8,
         buffer_size: u8,
-        blank_xact: TXInstruction,
+        abs_index: u64,
+        blank_xacts: Vec<TXInstruction>,
     ) -> ProgramResult {
         let smart_wallet = &mut ctx.accounts.smart_wallet;
         let tx = &mut ctx.accounts.transaction;
@@ -151,7 +152,7 @@ pub mod smart_wallet {
         tx.bump = bump;
 
         let mut buffer: Vec<TXInstruction> = Vec::new();
-        buffer.resize(buffer_size.try_into().unwrap(), blank_xact);
+        buffer.resize(buffer_size.try_into().unwrap(), blank_xacts.get(0).unwrap().clone());
         tx.instructions = buffer;
         smart_wallet.num_transactions = unwrap_int!(smart_wallet.num_transactions.checked_add(1));
 
@@ -177,9 +178,7 @@ pub mod smart_wallet {
         tx.executor = Pubkey::default();
         tx.executed_at = -1;
 
-
-
-        msg!("Buffered account for {:?} ixs", tx.instructions.len());
+        msg!("Buffered account for {:?} ixs", buffer_size);
         Ok(())
     }
 
@@ -190,6 +189,7 @@ pub mod smart_wallet {
         instructions: TXInstruction,
         index: u64,
     ) -> ProgramResult {
+        msg!("index: {:?} bump: {:?} len: {:?}", index, bump, ctx.accounts.transaction.instructions.len());
         let smart_wallet = &mut ctx.accounts.smart_wallet;
         require!(ctx.accounts.transaction.bump == bump, InvalidBump);
 
@@ -446,9 +446,10 @@ pub struct Auth<'info> {
 
 /// Accounts for [smart_wallet:append_transaction].
 #[derive(Accounts)]
-#[instruction(bump: u8, instructions: Vec<TXInstruction>)]
+#[instruction(bump: u8, instructions: TXInstruction)]
 pub struct AppendTransaction<'info> {
     /// The [SmartWallet].
+    #[account(mut)]
     pub smart_wallet: Account<'info, SmartWallet>,
     /// The [Transaction].
     #[account(mut)]
@@ -459,7 +460,7 @@ pub struct AppendTransaction<'info> {
 
 /// Accounts for [smart_wallet::create_transaction].
 #[derive(Accounts)]
-#[instruction(bump: u8, buffer_size: u8)]
+#[instruction(bump: u8, buffer_size: u8, abs_index: u64, blank_xacts: Vec<TXInstruction>)]
 pub struct CreateTransaction<'info> {
     /// The [SmartWallet].
     #[account(mut)]
@@ -470,11 +471,12 @@ pub struct CreateTransaction<'info> {
         seeds = [
             b"GokiTransaction".as_ref(),
             smart_wallet.key().to_bytes().as_ref(),
-            smart_wallet.num_transactions.to_le_bytes().as_ref()
+            abs_index.to_le_bytes().as_ref()
+            // smart_wallet.num_transactions.to_le_bytes().as_ref()
         ],
         bump = bump,
         payer = payer,
-        space = Transaction::space(buffer_size),
+        space = Transaction::space(blank_xacts)
     )]
     pub transaction: Account<'info, Transaction>,
     /// One of the owners. Checked in the handler via [SmartWallet::owner_index].
