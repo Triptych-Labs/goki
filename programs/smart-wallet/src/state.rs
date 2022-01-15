@@ -69,6 +69,74 @@ pub struct Transaction {
     pub executed_at: i64,
 }
 
+impl Transaction {
+    /// Computes the space a [Transaction] uses.
+    pub fn new(size: usize) -> usize {
+        std::mem::size_of::<Transaction>() * size
+    }
+    /// Computes the space a [Transaction] uses.
+    pub fn space(blank_xacts: Vec<TXInstruction>) -> usize {
+        4  // Anchor discriminato
+            + std::mem::size_of::<Transaction>()
+            + 4 // Vec discriminator
+            // + blank_xact.space()
+            + (blank_xacts.iter().map(|ix| ix.space()).sum::<usize>())
+    }
+}
+
+/// Instruction.
+#[account]
+#[derive(Debug, Default, PartialEq)]
+pub struct Stake {
+    pub bump: u8,
+    pub duration: i32,
+    pub genesis_epoch: Vec<u8>,
+    pub name: Vec<u8>,
+    pub reward_pot: i64,
+    pub protected_gids: Vec<u8>,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, Default, PartialEq)]
+pub struct StakeData {
+    pub duration: i32,
+    pub genesis_epoch: Vec<u8>,
+    pub name: Vec<u8>,
+    pub reward_pot: i64,
+    pub protected_gids: Vec<u8>,
+}
+
+impl Stake {
+    pub fn space(protected_gids: usize) -> usize {
+        8 +
+            1 + // bump
+            4 + // reward_tender
+            4 + (8 * 1) + // gen epoch
+            4 + (32 * 1) + // 32 char name utf-8
+            8 + // reward_pot
+            4 + (protected_gids * 1) // protected_gids
+    }
+}
+/// Instruction.
+#[account]
+#[derive(Debug, Default, PartialEq)]
+pub struct Ticket {
+    pub enrollment_epoch: Vec<u8>,
+    pub bump: u8,
+    pub gid: u8,
+    pub mint: Pubkey,
+}
+
+impl Ticket {
+    /// Space that a [TXInstruction] takes up.
+    pub fn space() -> usize {
+        8 +
+            4 + (8 * 1) +
+            1 +
+            1 +
+            4 + 32
+    }
+}
+
 /// Instruction.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, Default, PartialEq)]
 pub struct TXInstruction {
@@ -90,21 +158,6 @@ impl TXInstruction {
         std::mem::size_of::<Pubkey>()
             + (self.keys.len() as usize) * std::mem::size_of::<TXAccountMeta>()
             + (self.data.len() as usize)
-    }
-}
-
-impl Transaction {
-    /// Computes the space a [Transaction] uses.
-    pub fn new(size: usize) -> usize {
-        std::mem::size_of::<Transaction>() * size
-    }
-    /// Computes the space a [Transaction] uses.
-    pub fn space(blank_xacts: Vec<TXInstruction>) -> usize {
-        4  // Anchor discriminator
-            + std::mem::size_of::<Transaction>()
-            + 4 // Vec discriminator
-            // + blank_xact.space()
-            + (blank_xacts.iter().map(|ix| ix.space()).sum::<usize>())
     }
 }
 

@@ -25,7 +25,6 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program;
 use anchor_lang::Key;
 use std::convert::Into;
-use std::vec::Vec;
 use vipers::invariant;
 use vipers::unwrap_int;
 use vipers::unwrap_or_err;
@@ -52,7 +51,7 @@ pub const DEFAULT_GRACE_PERIOD: i64 = 14 * SECONDS_PER_DAY;
 /// Constant declaring that there is no ETA of the transaction.
 pub const NO_ETA: i64 = -1;
 
-declare_id!("DTFZbc7n4zyqLDsP9nXvqgmnuGM1HEiTjjj2UBRCSX3x");
+declare_id!("Ch7jiWebvMqudbC3bG55sEe7dRgh515FLT1FkETtCK4S");
 
 #[program]
 /// Goki smart wallet program.
@@ -140,44 +139,9 @@ pub mod smart_wallet {
     /// Creates a new [Transaction] account, automatically signed by the creator,
     /// which must be one of the owners of the smart_wallet.
     pub fn create_transaction(
-        ctx: Context<CreateTransaction>,
-        bump: u8,
-        buffer_size: u8,
-        abs_index: u64,
-        blank_xacts: Vec<TXInstruction>,
+        _ctx: Context<CreateTransaction>,
+        buffer_size: usize,
     ) -> ProgramResult {
-        let smart_wallet = &mut ctx.accounts.smart_wallet;
-        let tx = &mut ctx.accounts.transaction;
-        tx.smart_wallet = smart_wallet.key();
-        tx.bump = bump;
-
-        let mut buffer: Vec<TXInstruction> = Vec::new();
-        buffer.resize(buffer_size.try_into().unwrap(), blank_xacts.get(0).unwrap().clone());
-        tx.instructions = buffer;
-        smart_wallet.num_transactions = unwrap_int!(smart_wallet.num_transactions.checked_add(1));
-
-        // generate the signers boolean list
-        let owners = &smart_wallet.owners;
-        let mut signers = Vec::new();
-        let owner_index = smart_wallet.owner_index(ctx.accounts.proposer.key())?;
-        signers.resize(owners.len(), false);
-        signers[owner_index] = true;
-        
-        // init the TX
-        let index = smart_wallet.num_transactions;
-        let tx = &mut ctx.accounts.transaction;
-        tx.smart_wallet = smart_wallet.key();
-        tx.index = index;
-        tx.bump = bump;
-
-        tx.proposer = ctx.accounts.proposer.key();
-        tx.signers = signers;
-        tx.owner_set_seqno = smart_wallet.owner_set_seqno;
-        tx.eta = NO_ETA;
-
-        tx.executor = Pubkey::default();
-        tx.executed_at = -1;
-
         msg!("Buffered account for {:?} ixs", buffer_size);
         Ok(())
     }
@@ -186,107 +150,18 @@ pub mod smart_wallet {
     pub fn append_transaction(
         ctx: Context<AppendTransaction>,
         bump: u8,
-        instructions: TXInstruction,
-        index: u64,
+        instructions: Vec<TXInstruction>,
     ) -> ProgramResult {
-        msg!("index: {:?} bump: {:?} len: {:?}", index, bump, ctx.accounts.transaction.instructions.len());
         let smart_wallet = &mut ctx.accounts.smart_wallet;
+        smart_wallet.num_transactions = unwrap_int!(smart_wallet.num_transactions.checked_add(1));
+
         require!(ctx.accounts.transaction.bump == bump, InvalidBump);
 
-        /*
         let mut tx = ctx.accounts.transaction.instructions.clone();
         let mut ixs_vec = instructions.clone();
         tx.append(&mut ixs_vec);
-        */
-        let id: usize = index.try_into().unwrap();
-        ctx.accounts.transaction.instructions[id] = instructions;
 
-        smart_wallet.num_transactions = unwrap_int!(smart_wallet.num_transactions.checked_add(1));
-
-        msg!("Buffered account for {:?} ixs", smart_wallet.num_transactions);
-        Ok(())
-    }
-
-    /// Registers participant.
-    pub fn create_stake(
-        ctx: Context<CreateStake>,
-        bump: u8,
-        abs_index: u64,
-        stake_data: StakeData,
-    ) -> ProgramResult {
-        let stake_account = &mut ctx.accounts.stake;
-        stake_account.bump = bump;
-        stake_account.genesis_epoch = stake_data.genesis_epoch;
-        stake_account.name = stake_data.name;
-        stake_account.reward_pot = stake_data.reward_pot;
-        stake_account.duration = stake_data.duration;
-        stake_account.protected_gids = stake_data.protected_gids;
-
-        msg!("Stake genesis for {:?} with {:?} genesis_epoch", stake_account.key(), stake_account.genesis_epoch);
-        msg!("{:?} duration", stake_account.duration);
-        Ok(())
-    }
-    /// Registers participant.
-    pub fn register_entity(
-        ctx: Context<RegisterEntity>,
-        bump: u8,
-        gid: u8,
-        mint: Pubkey,
-    ) -> ProgramResult {
-        let ticket_account = &mut ctx.accounts.ticket;
-        let enrollment_epoch: i64 = Clock::get()?.unix_timestamp;
-        ticket_account.enrollment_epoch = enrollment_epoch.to_le_bytes().to_vec();
-        ticket_account.bump = bump;
-        ticket_account.gid = gid;
-        ticket_account.mint = mint;
-
-        msg!("Registering entity {:?} with {:?} gid", ctx.accounts.owner.key(), ticket_account.gid);
-        msg!("{:?} epoch", enrollment_epoch);
-        Ok(())
-    }
-
-    /// Updates participant.
-    pub fn claim_entity(
-        ctx: Context<ClaimEntity>,
-        bump: u8,
-        mint: Pubkey,
-    ) -> ProgramResult {
-        let reset_epoch: i64 = Clock::get()?.unix_timestamp;
-        require!(ctx.accounts.ticket.bump == bump, InvalidBump);
-        require!(ctx.accounts.ticket.mint == mint, InvalidMint);
-
-        let ticket_account = &mut ctx.accounts.ticket;
-        let last_epoch = ticket_account.enrollment_epoch.clone();
-        ticket_account.enrollment_epoch = reset_epoch.to_le_bytes().to_vec();
-
-        msg!("Updating participant {:?}", ctx.accounts.owner.key());
-        msg!("{:?} last - {:?} epoch", last_epoch, ticket_account.enrollment_epoch);
-        Ok(())
-    }
-    /// Updates participant.
-    pub fn withdraw_entity(
-        ctx: Context<WithdrawEntity>,
-        bump: u8,
-        mint: Pubkey,
-    ) -> ProgramResult {
-        let reset_epoch: i64 = Clock::get()?.unix_timestamp;
-        require!(ctx.accounts.ticket.bump == bump, InvalidBump);
-        require!(ctx.accounts.ticket.mint == mint, InvalidMint);
-        require!(!ctx.accounts.stake.protected_gids.contains(&ctx.accounts.ticket.gid), ProtectedGid);
-
-        let ticket_account = &mut ctx.accounts.ticket;
-        let last_epoch = i64::from_le_bytes(ticket_account.enrollment_epoch.clone().as_slice().try_into().unwrap());
-        ticket_account.enrollment_epoch = reset_epoch.to_le_bytes().to_vec();
-        emit!(WithdrawEntityEvent {
-            smart_wallet: ctx.accounts.smart_wallet.key(),
-            duration: (reset_epoch - last_epoch).to_le_bytes().to_vec(),
-            mint: mint,
-            ticket: ticket_account.key(),
-            stake: ctx.accounts.stake.key(),
-        });
-
-        // msg!("Withdrawing participant {:?}", mint.key());
-        // msg!("{:?} last - {:?} epoch", last_epoch, reset_epoch);
+        ctx.accounts.transaction.instructions = tx;
         Ok(())
     }
 
@@ -359,7 +234,6 @@ pub mod smart_wallet {
             .accounts
             .smart_wallet
             .owner_index(ctx.accounts.owner.key())?;
-        msg!("Signers len {:?}", ctx.accounts.transaction.signers);
         ctx.accounts.transaction.signers[owner_index] = true;
 
         emit!(TransactionApproveEvent {
@@ -529,10 +403,9 @@ pub struct Auth<'info> {
 
 /// Accounts for [smart_wallet:append_transaction].
 #[derive(Accounts)]
-#[instruction(bump: u8, instructions: TXInstruction)]
+#[instruction(bump: u8, instructions: Vec<TXInstruction>)]
 pub struct AppendTransaction<'info> {
     /// The [SmartWallet].
-    #[account(mut)]
     pub smart_wallet: Account<'info, SmartWallet>,
     /// The [Transaction].
     #[account(mut)]
@@ -541,106 +414,9 @@ pub struct AppendTransaction<'info> {
     pub owner: Signer<'info>,
 }
 
-/// Accounts for [smart_wallet:append_transaction].
-#[derive(Accounts)]
-#[instruction(bump: u8, abs_index: u64, stake_data: StakeData)]
-pub struct CreateStake<'info> {
-    /// The [SmartWallet].
-    #[account(mut)]
-    pub smart_wallet: Account<'info, SmartWallet>,
-    /// The [Ticket].
-    #[account(
-        init,
-        seeds = [
-            b"Stake".as_ref(),
-            smart_wallet.key().to_bytes().as_ref(),
-            abs_index.to_le_bytes().as_ref()
-        ],
-        bump = bump,
-        payer = payer,
-        space = Stake::space(stake_data.protected_gids.len()),
-    )]
-    pub stake: Account<'info, Stake>,
-    /// Payer to create the [Transaction].
-    #[account(mut)]
-    pub payer: Signer<'info>,
-    /// The mint owner. Checked in the handler.
-    pub owner: Signer<'info>,
-    /// The [System] program.
-    pub system_program: Program<'info, System>,
-}
-/// Accounts for [smart_wallet:append_transaction].
-#[derive(Accounts)]
-#[instruction(bump: u8, gid: u8, mint: Pubkey)]
-pub struct RegisterEntity<'info> {
-    /// The [SmartWallet].
-    #[account(mut)]
-    pub smart_wallet: Account<'info, SmartWallet>,
-    /// The [Ticket].
-    #[account(
-        init,
-        seeds = [
-            system_program.key().to_bytes().as_ref(),
-            smart_wallet.key().to_bytes().as_ref(),
-            mint.to_bytes().as_ref()
-        ],
-        bump = bump,
-        payer = payer,
-        space = Ticket::space(),
-    )]
-    pub ticket: Account<'info, Ticket>,
-    /// Payer to create the [Transaction].
-    #[account(mut)]
-    pub payer: Signer<'info>,
-    /// The mint owner. Checked in the handler.
-    pub owner: Signer<'info>,
-    /// The [System] program.
-    pub system_program: Program<'info, System>,
-}
-
-/// Accounts for [smart_wallet:append_transaction].
-#[derive(Accounts)]
-#[instruction(bump: u8, mint: Pubkey)]
-pub struct ClaimEntity<'info> {
-    /// The [SmartWallet].
-    #[account(mut)]
-    pub smart_wallet: Account<'info, SmartWallet>,
-    /// The [Ticket].
-    #[account(mut)]
-    pub ticket: Account<'info, Ticket>,
-    /// Payer to create the [Transaction].
-    #[account(mut)]
-    pub payer: Signer<'info>,
-    /// The mint owner. Checked in the handler.
-    pub owner: Signer<'info>,
-    /// The [System] program.
-    pub system_program: Program<'info, System>,
-}
-/// Accounts for [smart_wallet:append_transaction].
-#[derive(Accounts)]
-#[instruction(bump: u8, mint: Pubkey)]
-pub struct WithdrawEntity<'info> {
-    /// The [SmartWallet].
-    #[account(mut)]
-    pub smart_wallet: Account<'info, SmartWallet>,
-    /// The [Stake].
-    #[account(mut)]
-    pub stake: Account<'info, Stake>,
-    /// The [Ticket].
-    #[account(mut)]
-    pub ticket: Account<'info, Ticket>,
-    /// Payer to create the [Transaction].
-    #[account(mut)]
-    pub payer: Signer<'info>,
-    /// The mint owner. Checked in the handler.
-    pub owner: Signer<'info>,
-    /// The [System] program.
-    pub system_program: Program<'info, System>,
-}
-
 /// Accounts for [smart_wallet::create_transaction].
 #[derive(Accounts)]
-#[instruction(bump: u8, buffer_size: u8, abs_index: u64, blank_xacts: Vec<TXInstruction>)]
+#[instruction(bump: u8, buffer_size: usize)]
 pub struct CreateTransaction<'info> {
     /// The [SmartWallet].
     #[account(mut)]
@@ -651,12 +427,11 @@ pub struct CreateTransaction<'info> {
         seeds = [
             b"GokiTransaction".as_ref(),
             smart_wallet.key().to_bytes().as_ref(),
-            abs_index.to_le_bytes().as_ref()
-            // smart_wallet.num_transactions.to_le_bytes().as_ref()
+            smart_wallet.num_transactions.to_le_bytes().as_ref()
         ],
         bump = bump,
         payer = payer,
-        space = Transaction::space(blank_xacts)
+        space = Transaction::space(buffer_size),
     )]
     pub transaction: Account<'info, Transaction>,
     /// One of the owners. Checked in the handler via [SmartWallet::owner_index].
@@ -766,8 +541,4 @@ pub enum ErrorCode {
     SubaccountOwnerMismatch,
     #[msg("Invalid bump seed.")]
     InvalidBump,
-    #[msg("Invalid Mint.")]
-    InvalidMint,
-    #[msg("Protected GID.")]
-    ProtectedGid,
 }

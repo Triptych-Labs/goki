@@ -13,6 +13,21 @@ pub struct WalletCreateEvent {
     pub timestamp: i64,
 }
 
+/// Emitted when a [SmartWallet] is created.
+#[event]
+pub struct WithdrawEntityEvent {
+    #[index]
+    pub smart_wallet: Pubkey,
+    #[index]
+    pub duration: Vec<u8>,
+    #[index]
+    pub mint: Pubkey,
+    #[index]
+    pub ticket: Pubkey,
+    #[index]
+    pub stake: Pubkey,
+}
+
 /// Emitted when the owners of a [SmartWallet] are changed.
 #[event]
 pub struct WalletSetOwnersEvent {
