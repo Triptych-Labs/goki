@@ -22,6 +22,7 @@
 #![allow(rustdoc::missing_doc_code_examples)]
 
 use anchor_lang::prelude::*;
+use anchor_spl::token::{Token};
 use anchor_lang::solana_program;
 use anchor_lang::Key;
 use std::convert::Into;
@@ -52,7 +53,7 @@ pub const DEFAULT_GRACE_PERIOD: i64 = 14 * SECONDS_PER_DAY;
 /// Constant declaring that there is no ETA of the transaction.
 pub const NO_ETA: i64 = -1;
 
-declare_id!("DTFZbc7n4zyqLDsP9nXvqgmnuGM1HEiTjjj2UBRCSX3x");
+declare_id!("BDmweiovSpCLySvAXckZKW6vSBisNzVZDDS9wuuSGfQU");
 
 #[program]
 /// Goki smart wallet program.
@@ -221,72 +222,110 @@ pub mod smart_wallet {
         stake_account.reward_pot = stake_data.reward_pot;
         stake_account.duration = stake_data.duration;
         stake_account.protected_gids = stake_data.protected_gids;
+        stake_account.uuid = stake_data.uuid;
 
         msg!("Stake genesis for {:?} with {:?} genesis_epoch", stake_account.key(), stake_account.genesis_epoch);
         msg!("{:?} duration", stake_account.duration);
+        Ok(())
+    }
+    /// inits rollup account.
+    pub fn rollup_entity(
+        ctx: Context<RollupEntityInit>,
+        bump: u8,
+        gid: u16,
+    ) -> ProgramResult {
+        let enrollment_epoch: i64 = Clock::get()?.unix_timestamp;
+
+        let rollup_account = &mut ctx.accounts.rollup;
+        require!(rollup_account.gid == gid, NoGIDJack);
+        rollup_account.timestamp = enrollment_epoch.to_le_bytes().to_vec();
+        rollup_account.bump = bump;
+        rollup_account.gid = gid;
+        rollup_account.mints = 0;
+
         Ok(())
     }
     /// Registers participant.
     pub fn register_entity(
         ctx: Context<RegisterEntity>,
         bump: u8,
-        gid: u8,
-        mint: Pubkey,
+        gid: u16,
     ) -> ProgramResult {
-        let ticket_account = &mut ctx.accounts.ticket;
         let enrollment_epoch: i64 = Clock::get()?.unix_timestamp;
+        let ticket_account = &mut ctx.accounts.ticket;
+        let rollup_account = &mut ctx.accounts.rollup;
+
         ticket_account.enrollment_epoch = enrollment_epoch.to_le_bytes().to_vec();
         ticket_account.bump = bump;
         ticket_account.gid = gid;
-        ticket_account.mint = mint;
+        ticket_account.mint = ctx.accounts.mint.key();
+        ticket_account.owner = ctx.accounts.owner.key();
+        require!(ctx.accounts.ticket.mint == ctx.accounts.mint.key(), InvalidMint);
+        rollup_account.mints = unwrap_int!(rollup_account.mints.checked_add(1));
 
-        msg!("Registering entity {:?} with {:?} gid", ctx.accounts.owner.key(), ticket_account.gid);
-        msg!("{:?} epoch", enrollment_epoch);
         Ok(())
     }
 
     /// Updates participant.
-    pub fn claim_entity(
-        ctx: Context<ClaimEntity>,
+    pub fn claim_entities(
+        ctx: Context<ClaimEntities>,
         bump: u8,
-        mint: Pubkey,
+    ) -> ProgramResult {
+        let reset_epoch: i64 = Clock::get()?.unix_timestamp;
+        require!(ctx.accounts.rollup.bump == bump, InvalidBump);
+
+        let rollup_account = &mut ctx.accounts.rollup;
+        let former_epoch = rollup_account.timestamp.clone();
+        let duration = reset_epoch - i64::from_le_bytes(former_epoch.try_into().unwrap());
+
+        let former_epoch = rollup_account.timestamp.clone();
+        emit!(ClaimEntitiesEvent {
+            smart_wallet: ctx.accounts.smart_wallet.key(),
+            duration: duration.to_le_bytes().to_vec(),
+            last_epoch: former_epoch,
+            mints: rollup_account.mints,
+            rollup: rollup_account.key(),
+            stake: ctx.accounts.stake.key(),
+            owner: ctx.accounts.owner.key(),
+        });
+        rollup_account.timestamp = reset_epoch.to_le_bytes().to_vec();
+        Ok(())
+    }
+    /// Updates participant.
+    pub fn update_entity(
+        ctx: Context<UpdateEntity>,
+        bump: u8,
     ) -> ProgramResult {
         let reset_epoch: i64 = Clock::get()?.unix_timestamp;
         require!(ctx.accounts.ticket.bump == bump, InvalidBump);
-        require!(ctx.accounts.ticket.mint == mint, InvalidMint);
+        require!(ctx.accounts.ticket.mint == ctx.accounts.mint.key(), InvalidMint);
+        require!(ctx.accounts.mint.owner.key() == ctx.accounts.token_program.key(), NoJack);
 
         let ticket_account = &mut ctx.accounts.ticket;
-        let last_epoch = ticket_account.enrollment_epoch.clone();
         ticket_account.enrollment_epoch = reset_epoch.to_le_bytes().to_vec();
 
-        msg!("Updating participant {:?}", ctx.accounts.owner.key());
-        msg!("{:?} last - {:?} epoch", last_epoch, ticket_account.enrollment_epoch);
         Ok(())
     }
     /// Updates participant.
     pub fn withdraw_entity(
         ctx: Context<WithdrawEntity>,
         bump: u8,
-        mint: Pubkey,
     ) -> ProgramResult {
-        let reset_epoch: i64 = Clock::get()?.unix_timestamp;
+        let reset_epoch: i64 = 0;
         require!(ctx.accounts.ticket.bump == bump, InvalidBump);
-        require!(ctx.accounts.ticket.mint == mint, InvalidMint);
+        require!(ctx.accounts.ticket.mint == ctx.accounts.mint.key(), InvalidMint);
         require!(!ctx.accounts.stake.protected_gids.contains(&ctx.accounts.ticket.gid), ProtectedGid);
 
         let ticket_account = &mut ctx.accounts.ticket;
-        let last_epoch = i64::from_le_bytes(ticket_account.enrollment_epoch.clone().as_slice().try_into().unwrap());
         ticket_account.enrollment_epoch = reset_epoch.to_le_bytes().to_vec();
         emit!(WithdrawEntityEvent {
             smart_wallet: ctx.accounts.smart_wallet.key(),
-            duration: (reset_epoch - last_epoch).to_le_bytes().to_vec(),
-            mint: mint,
+            mint: ctx.accounts.mint.key(),
             ticket: ticket_account.key(),
             stake: ctx.accounts.stake.key(),
+            owner: ctx.accounts.owner.key(),
         });
 
-        // msg!("Withdrawing participant {:?}", mint.key());
-        // msg!("{:?} last - {:?} epoch", last_epoch, reset_epoch);
         Ok(())
     }
 
@@ -571,8 +610,10 @@ pub struct CreateStake<'info> {
 }
 /// Accounts for [smart_wallet:append_transaction].
 #[derive(Accounts)]
-#[instruction(bump: u8, gid: u8, mint: Pubkey)]
-pub struct RegisterEntity<'info> {
+#[instruction(bump: u8, gid: u16)]
+pub struct RollupEntityInit<'info> {
+    /// Payer to create the [Transaction].
+    // pub mint: UncheckedAccount<'info>,
     /// The [SmartWallet].
     #[account(mut)]
     pub smart_wallet: Account<'info, SmartWallet>,
@@ -580,35 +621,67 @@ pub struct RegisterEntity<'info> {
     #[account(
         init,
         seeds = [
+            smart_wallet.key().to_bytes().as_ref(),
+            owner.key().to_bytes().as_ref(),
+            gid.to_le_bytes().as_ref()
+        ],
+        bump = bump,
+        payer = payer,
+        space = Rollup::space(),
+    )]
+    pub rollup: Account<'info, Rollup>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    /// The mint owner. Checked in the handler.
+    pub owner: Signer<'info>,
+    /// The [System] program.
+    pub system_program: Program<'info, System>,
+}
+/// Accounts for [smart_wallet:append_transaction].
+#[derive(Accounts)]
+#[instruction(bump: u8, gid: u16)]
+pub struct RegisterEntity<'info> {
+    /// Payer to create the [Transaction].
+    // pub mint: UncheckedAccount<'info>,
+    /// The [SmartWallet].
+    #[account(mut)]
+    pub smart_wallet: Account<'info, SmartWallet>,
+    #[account(mut)]
+    pub rollup: Account<'info, Rollup>,
+    /// The [Ticket].
+    #[account(
+        init,
+        seeds = [
             system_program.key().to_bytes().as_ref(),
             smart_wallet.key().to_bytes().as_ref(),
-            mint.to_bytes().as_ref()
+            mint.key().to_bytes().as_ref()
         ],
         bump = bump,
         payer = payer,
         space = Ticket::space(),
     )]
     pub ticket: Account<'info, Ticket>,
-    /// Payer to create the [Transaction].
     #[account(mut)]
     pub payer: Signer<'info>,
     /// The mint owner. Checked in the handler.
     pub owner: Signer<'info>,
+    pub mint: UncheckedAccount<'info>,
     /// The [System] program.
     pub system_program: Program<'info, System>,
 }
 
 /// Accounts for [smart_wallet:append_transaction].
 #[derive(Accounts)]
-#[instruction(bump: u8, mint: Pubkey)]
-pub struct ClaimEntity<'info> {
+#[instruction(bump: u8)]
+pub struct ClaimEntities<'info> {
     /// The [SmartWallet].
     #[account(mut)]
     pub smart_wallet: Account<'info, SmartWallet>,
+    #[account(mut)]
+    pub rollup: Account<'info, Rollup>,
     /// The [Ticket].
     #[account(mut)]
-    pub ticket: Account<'info, Ticket>,
-    /// Payer to create the [Transaction].
+    pub stake: Account<'info, Stake>,
     #[account(mut)]
     pub payer: Signer<'info>,
     /// The mint owner. Checked in the handler.
@@ -616,25 +689,36 @@ pub struct ClaimEntity<'info> {
     /// The [System] program.
     pub system_program: Program<'info, System>,
 }
-/// Accounts for [smart_wallet:append_transaction].
 #[derive(Accounts)]
-#[instruction(bump: u8, mint: Pubkey)]
-pub struct WithdrawEntity<'info> {
-    /// The [SmartWallet].
+#[instruction(bump: u8)]
+pub struct UpdateEntity<'info> {
     #[account(mut)]
     pub smart_wallet: Account<'info, SmartWallet>,
-    /// The [Stake].
     #[account(mut)]
     pub stake: Account<'info, Stake>,
-    /// The [Ticket].
     #[account(mut)]
     pub ticket: Account<'info, Ticket>,
-    /// Payer to create the [Transaction].
     #[account(mut)]
     pub payer: Signer<'info>,
-    /// The mint owner. Checked in the handler.
     pub owner: Signer<'info>,
-    /// The [System] program.
+    pub mint: UncheckedAccount<'info>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+/// Accounts for [smart_wallet:append_transaction].
+#[derive(Accounts)]
+#[instruction(bump: u8)]
+pub struct WithdrawEntity<'info> {
+    #[account(mut)]
+    pub smart_wallet: Account<'info, SmartWallet>,
+    #[account(mut)]
+    pub stake: Account<'info, Stake>,
+    #[account(mut)]
+    pub ticket: Account<'info, Ticket>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub owner: Signer<'info>,
+    pub mint: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -770,4 +854,8 @@ pub enum ErrorCode {
     InvalidMint,
     #[msg("Protected GID.")]
     ProtectedGid,
+    #[msg("Qualified Hijack.")]
+    NoJack,
+    #[msg("Qualified GID Hijack.")]
+    NoGIDJack,
 }

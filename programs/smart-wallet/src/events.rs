@@ -15,17 +15,35 @@ pub struct WalletCreateEvent {
 
 /// Emitted when a [SmartWallet] is created.
 #[event]
+pub struct ClaimEntitiesEvent {
+    #[index]
+    pub smart_wallet: Pubkey,
+    pub duration: Vec<u8>,
+    pub last_epoch: Vec<u8>,
+    pub mints: u32,
+    pub rollup: Pubkey,
+    pub stake: Pubkey,
+    pub owner: Pubkey,
+}
+#[event]
+pub struct ClaimEntityEvent {
+    #[index]
+    pub smart_wallet: Pubkey,
+    pub duration: Vec<u8>,
+    pub mint: Pubkey,
+    pub ticket: Pubkey,
+    pub stake: Pubkey,
+    pub owner: Pubkey,
+}
+/// Emitted when a [SmartWallet] is created.
+#[event]
 pub struct WithdrawEntityEvent {
     #[index]
     pub smart_wallet: Pubkey,
-    #[index]
-    pub duration: Vec<u8>,
-    #[index]
     pub mint: Pubkey,
-    #[index]
     pub ticket: Pubkey,
-    #[index]
     pub stake: Pubkey,
+    pub owner: Pubkey,
 }
 
 /// Emitted when the owners of a [SmartWallet] are changed.

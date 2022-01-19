@@ -84,6 +84,16 @@ impl Transaction {
     }
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, Default, PartialEq)]
+pub struct StakeData {
+    pub duration: i32,
+    pub genesis_epoch: Vec<u8>,
+    pub name: Vec<u8>,
+    pub reward_pot: i64,
+    pub protected_gids: Vec<u16>,
+    pub uuid: Vec<u8>,
+}
+
 /// Instruction.
 #[account]
 #[derive(Debug, Default, PartialEq)]
@@ -93,16 +103,8 @@ pub struct Stake {
     pub genesis_epoch: Vec<u8>,
     pub name: Vec<u8>,
     pub reward_pot: i64,
-    pub protected_gids: Vec<u8>,
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, Default, PartialEq)]
-pub struct StakeData {
-    pub duration: i32,
-    pub genesis_epoch: Vec<u8>,
-    pub name: Vec<u8>,
-    pub reward_pot: i64,
-    pub protected_gids: Vec<u8>,
+    pub protected_gids: Vec<u16>,
+    pub uuid: Vec<u8>,
 }
 
 impl Stake {
@@ -113,7 +115,9 @@ impl Stake {
             4 + (8 * 1) + // gen epoch
             4 + (32 * 1) + // 32 char name utf-8
             8 + // reward_pot
-            4 + (protected_gids * 1) // protected_gids
+            4 + (protected_gids * 2) + // protected_gids
+            4 + 36 // 36 char bytes of uuid string
+
     }
 }
 /// Instruction.
@@ -122,18 +126,39 @@ impl Stake {
 pub struct Ticket {
     pub enrollment_epoch: Vec<u8>,
     pub bump: u8,
-    pub gid: u8,
+    pub gid: u16,
     pub mint: Pubkey,
+    pub owner: Pubkey,
 }
 
 impl Ticket {
-    /// Space that a [TXInstruction] takes up.
     pub fn space() -> usize {
         8 +
             4 + (8 * 1) +
             1 +
-            1 +
+            2 +
+            4 + 32 +
             4 + 32
+    }
+}
+
+/// Instruction.
+#[account]
+#[derive(Debug, Default, PartialEq)]
+pub struct Rollup {
+    pub bump: u8,
+    pub timestamp: Vec<u8>,
+    pub gid: u16,
+    pub mints: u32,
+}
+
+impl Rollup {
+    pub fn space() -> usize {
+        8 +
+            1 +
+            4 + (8 * 1) +
+            2 +
+            4
     }
 }
 
