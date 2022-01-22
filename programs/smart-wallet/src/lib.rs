@@ -295,14 +295,14 @@ pub mod smart_wallet {
     pub fn update_entity(
         ctx: Context<UpdateEntity>,
         bump: u8,
+        timestamp: Vec<u8>,
     ) -> ProgramResult {
-        let reset_epoch: i64 = Clock::get()?.unix_timestamp;
         require!(ctx.accounts.ticket.bump == bump, InvalidBump);
         require!(ctx.accounts.ticket.mint == ctx.accounts.mint.key(), InvalidMint);
-        require!(ctx.accounts.mint.owner.key() == ctx.accounts.token_program.key(), NoJack);
+        require!(ctx.accounts.rollup.timestamp == timestamp, DisingenuousUpdate);
 
         let ticket_account = &mut ctx.accounts.ticket;
-        ticket_account.enrollment_epoch = reset_epoch.to_le_bytes().to_vec();
+        ticket_account.enrollment_epoch = timestamp;
 
         Ok(())
     }
@@ -690,14 +690,14 @@ pub struct ClaimEntities<'info> {
     pub system_program: Program<'info, System>,
 }
 #[derive(Accounts)]
-#[instruction(bump: u8)]
+#[instruction(bump: u8, timestamp: Vec<u8>)]
 pub struct UpdateEntity<'info> {
     #[account(mut)]
     pub smart_wallet: Account<'info, SmartWallet>,
     #[account(mut)]
-    pub stake: Account<'info, Stake>,
-    #[account(mut)]
     pub ticket: Account<'info, Ticket>,
+    #[account(mut)]
+    pub rollup: Account<'info, Rollup>,
     #[account(mut)]
     pub payer: Signer<'info>,
     pub owner: Signer<'info>,
@@ -858,4 +858,6 @@ pub enum ErrorCode {
     NoJack,
     #[msg("Qualified GID Hijack.")]
     NoGIDJack,
+    #[msg("Inconsistent Timestamp.")]
+    DisingenuousUpdate,
 }
