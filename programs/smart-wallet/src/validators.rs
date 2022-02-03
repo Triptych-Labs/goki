@@ -9,16 +9,6 @@ impl<'info> Validate<'info> for CreateSmartWallet<'info> {
     }
 }
 
-impl<'info> Validate<'info> for Auth<'info> {
-    fn validate(&self) -> ProgramResult {
-        invariant!(
-            self.smart_wallet.to_account_info().is_signer,
-            "smart_wallet.is_signer"
-        );
-        Ok(())
-    }
-}
-
 impl<'info> Validate<'info> for CreateTransaction<'info> {
     fn validate(&self) -> ProgramResult {
         // owner_index check happens later
@@ -81,20 +71,6 @@ impl<'info> Validate<'info> for ExecuteTransaction<'info> {
         // this prevents common frontrunning/flash loan attacks
         self.smart_wallet.owner_index(self.owner.key())?;
 
-        Ok(())
-    }
-}
-
-impl<'info> Validate<'info> for OwnerInvokeInstruction<'info> {
-    fn validate(&self) -> ProgramResult {
-        self.smart_wallet.owner_index(self.owner.key())?;
-        Ok(())
-    }
-}
-
-impl<'info> Validate<'info> for CreateSubaccountInfo<'info> {
-    fn validate(&self) -> ProgramResult {
-        // no validation necessary
         Ok(())
     }
 }

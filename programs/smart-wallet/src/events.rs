@@ -12,6 +12,14 @@ pub struct WalletCreateEvent {
     pub minimum_delay: i64,
     pub timestamp: i64,
 }
+///
+/// Emitted when a [Stake] is created.
+#[event]
+pub struct CreateStakeEvent {
+    #[index]
+    pub smart_wallet: Pubkey,
+    pub stake: Pubkey,
+}
 
 /// Emitted when a [SmartWallet] is created.
 #[event]
@@ -20,6 +28,7 @@ pub struct ClaimEntitiesEvent {
     pub smart_wallet: Pubkey,
     pub duration: Vec<u8>,
     pub last_epoch: Vec<u8>,
+    pub reset_epoch: Vec<u8>,
     pub mints: u32,
     pub rollup: Pubkey,
     pub stake: Pubkey,

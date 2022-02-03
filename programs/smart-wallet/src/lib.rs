@@ -53,7 +53,7 @@ pub const DEFAULT_GRACE_PERIOD: i64 = 14 * SECONDS_PER_DAY;
 /// Constant declaring that there is no ETA of the transaction.
 pub const NO_ETA: i64 = -1;
 
-declare_id!("BDmweiovSpCLySvAXckZKW6vSBisNzVZDDS9wuuSGfQU");
+declare_id!("9UgyDew11rjMzcrWa8BMNQVkPSuU2Gv33YocZhfMQVu");
 
 #[program]
 /// Goki smart wallet program.
@@ -88,6 +88,7 @@ pub mod smart_wallet {
 
         smart_wallet.owners = owners.clone();
 
+        /*
         emit!(WalletCreateEvent {
             smart_wallet: ctx.accounts.smart_wallet.key(),
             owners,
@@ -95,46 +96,7 @@ pub mod smart_wallet {
             minimum_delay,
             timestamp: Clock::get()?.unix_timestamp
         });
-        Ok(())
-    }
-
-    /// Sets the owners field on the smart_wallet. The only way this can be invoked
-    /// is via a recursive call from execute_transaction -> set_owners.
-    #[access_control(ctx.accounts.validate())]
-    pub fn set_owners(ctx: Context<Auth>, owners: Vec<Pubkey>) -> ProgramResult {
-        let smart_wallet = &mut ctx.accounts.smart_wallet;
-        if (owners.len() as u64) < smart_wallet.threshold {
-            smart_wallet.threshold = owners.len() as u64;
-        }
-
-        smart_wallet.owners = owners.clone();
-        smart_wallet.owner_set_seqno = unwrap_int!(smart_wallet.owner_set_seqno.checked_add(1));
-
-        emit!(WalletSetOwnersEvent {
-            smart_wallet: ctx.accounts.smart_wallet.key(),
-            owners,
-            timestamp: Clock::get()?.unix_timestamp
-        });
-        Ok(())
-    }
-
-    /// Changes the execution threshold of the smart_wallet. The only way this can be
-    /// invoked is via a recursive call from execute_transaction ->
-    /// change_threshold.
-    #[access_control(ctx.accounts.validate())]
-    pub fn change_threshold(ctx: Context<Auth>, threshold: u64) -> ProgramResult {
-        require!(
-            threshold <= ctx.accounts.smart_wallet.owners.len() as u64,
-            InvalidThreshold
-        );
-        let smart_wallet = &mut ctx.accounts.smart_wallet;
-        smart_wallet.threshold = threshold;
-
-        emit!(WalletChangeThresholdEvent {
-            smart_wallet: ctx.accounts.smart_wallet.key(),
-            threshold,
-            timestamp: Clock::get()?.unix_timestamp
-        });
+        */
         Ok(())
     }
 
@@ -224,8 +186,12 @@ pub mod smart_wallet {
         stake_account.protected_gids = stake_data.protected_gids;
         stake_account.uuid = stake_data.uuid;
 
-        msg!("Stake genesis for {:?} with {:?} genesis_epoch", stake_account.key(), stake_account.genesis_epoch);
-        msg!("{:?} duration", stake_account.duration);
+        // msg!("Stake genesis for {:?} with {:?} genesis_epoch", stake_account.key(), stake_account.genesis_epoch);
+        // msg!("{:?} duration", stake_account.duration);
+        emit!(CreateStakeEvent {
+            smart_wallet: ctx.accounts.smart_wallet.key(),
+            stake: ctx.accounts.stake.key(),
+        });
         Ok(())
     }
     /// inits rollup account.
@@ -237,11 +203,11 @@ pub mod smart_wallet {
         let enrollment_epoch: i64 = Clock::get()?.unix_timestamp;
 
         let rollup_account = &mut ctx.accounts.rollup;
-        require!(rollup_account.gid == gid, NoGIDJack);
         rollup_account.timestamp = enrollment_epoch.to_le_bytes().to_vec();
         rollup_account.bump = bump;
         rollup_account.gid = gid;
         rollup_account.mints = 0;
+        require!(rollup_account.gid == gid, NoGIDJack);
 
         Ok(())
     }
@@ -254,19 +220,20 @@ pub mod smart_wallet {
         let enrollment_epoch: i64 = Clock::get()?.unix_timestamp;
         let ticket_account = &mut ctx.accounts.ticket;
         let rollup_account = &mut ctx.accounts.rollup;
+        require!(rollup_account.gid == gid, NoGIDJack);
 
         ticket_account.enrollment_epoch = enrollment_epoch.to_le_bytes().to_vec();
         ticket_account.bump = bump;
         ticket_account.gid = gid;
         ticket_account.mint = ctx.accounts.mint.key();
         ticket_account.owner = ctx.accounts.owner.key();
-        require!(ctx.accounts.ticket.mint == ctx.accounts.mint.key(), InvalidMint);
         rollup_account.mints = unwrap_int!(rollup_account.mints.checked_add(1));
+        msg!("{:?}", rollup_account.mints);
 
         Ok(())
     }
 
-    /// Updates participant.
+    /// claims all in participant.
     pub fn claim_entities(
         ctx: Context<ClaimEntities>,
         bump: u8,
@@ -275,20 +242,42 @@ pub mod smart_wallet {
         require!(ctx.accounts.rollup.bump == bump, InvalidBump);
 
         let rollup_account = &mut ctx.accounts.rollup;
-        let former_epoch = rollup_account.timestamp.clone();
-        let duration = reset_epoch - i64::from_le_bytes(former_epoch.try_into().unwrap());
+        require!(!ctx.accounts.stake.protected_gids.contains(&rollup_account.gid), ProtectedGid);
 
         let former_epoch = rollup_account.timestamp.clone();
+        let duration = reset_epoch - i64::from_le_bytes(former_epoch.try_into().unwrap());
+        let former_epoch = rollup_account.timestamp.clone();
+        rollup_account.timestamp = reset_epoch.to_le_bytes().to_vec();
         emit!(ClaimEntitiesEvent {
             smart_wallet: ctx.accounts.smart_wallet.key(),
             duration: duration.to_le_bytes().to_vec(),
             last_epoch: former_epoch,
+            reset_epoch: reset_epoch.to_le_bytes().to_vec(),
             mints: rollup_account.mints,
             rollup: rollup_account.key(),
             stake: ctx.accounts.stake.key(),
             owner: ctx.accounts.owner.key(),
         });
-        rollup_account.timestamp = reset_epoch.to_le_bytes().to_vec();
+        Ok(())
+    }
+    /// Updates participant.
+    pub fn update_entity_by_owner(
+        ctx: Context<UpdateEntityByOwner>,
+        bump: u8,
+    ) -> ProgramResult {
+        let reset_epoch: i64 = Clock::get()?.unix_timestamp;
+        let rollup_account = &mut ctx.accounts.rollup;
+        let ticket_account = &mut ctx.accounts.ticket;
+        let ata = anchor_spl::associated_token::get_associated_token_address(
+            &ctx.accounts.owner.key(),
+            &ctx.accounts.mint.key(),
+        );
+        require!(ata == ctx.accounts.mint_ata.key(), InvalidATA);
+        require!(ticket_account.bump == bump, InvalidBump);
+
+        rollup_account.mints = unwrap_int!(rollup_account.mints.checked_add(1));
+        ticket_account.enrollment_epoch = reset_epoch.to_le_bytes().to_vec();
+
         Ok(())
     }
     /// Updates participant.
@@ -297,26 +286,58 @@ pub mod smart_wallet {
         bump: u8,
         timestamp: Vec<u8>,
     ) -> ProgramResult {
+        let _owner_index = ctx.accounts.smart_wallet.owner_index(ctx.accounts.smart_wallet_owner.key())?;
         require!(ctx.accounts.ticket.bump == bump, InvalidBump);
-        require!(ctx.accounts.ticket.mint == ctx.accounts.mint.key(), InvalidMint);
-        require!(ctx.accounts.rollup.timestamp == timestamp, DisingenuousUpdate);
+        let timestamp_i = i64::from_le_bytes(timestamp.try_into().unwrap());
+        let timestamp_a = i64::from_le_bytes(ctx.accounts.rollup.timestamp.clone().try_into().unwrap());
+        msg!("{:?} {:?}", timestamp_i, timestamp_a);
+        require!(timestamp_i == timestamp_a, DisingenuousUpdate);
+
 
         let ticket_account = &mut ctx.accounts.ticket;
-        ticket_account.enrollment_epoch = timestamp;
+        ticket_account.enrollment_epoch = timestamp_i.to_le_bytes().to_vec();
 
         Ok(())
     }
-    /// Updates participant.
+    pub fn withdraw_entity_by_program(
+        ctx: Context<WithdrawEntityByProgram>,
+        bump: u8,
+    ) -> ProgramResult {
+        let _owner_index = ctx.accounts.smart_wallet.owner_index(ctx.accounts.smart_wallet_owner.key())?;
+        // -1 is !false
+        let reset_epoch: i64 = -1;
+        let rollup_account = &mut ctx.accounts.rollup;
+        let ticket_account = &mut ctx.accounts.ticket;
+
+        require!(ticket_account.bump == bump, InvalidBump);
+        require!(ticket_account.mint == ctx.accounts.mint.key(), InvalidMint);
+        // require!(!ctx.accounts.stake.protected_gids.contains(&ticket_account.gid), ProtectedGid);
+
+        // rollup_account.mints = unwrap_int!(rollup_account.mints.checked_sub(1));
+        ticket_account.enrollment_epoch = reset_epoch.to_le_bytes().to_vec();
+        emit!(WithdrawEntityEvent {
+            smart_wallet: ctx.accounts.smart_wallet.key(),
+            mint: ctx.accounts.mint.key(),
+            ticket: ticket_account.key(),
+            stake: ctx.accounts.stake.key(),
+            owner: ctx.accounts.owner.key(),
+        });
+
+        Ok(())
+    }
     pub fn withdraw_entity(
         ctx: Context<WithdrawEntity>,
         bump: u8,
     ) -> ProgramResult {
         let reset_epoch: i64 = 0;
-        require!(ctx.accounts.ticket.bump == bump, InvalidBump);
-        require!(ctx.accounts.ticket.mint == ctx.accounts.mint.key(), InvalidMint);
-        require!(!ctx.accounts.stake.protected_gids.contains(&ctx.accounts.ticket.gid), ProtectedGid);
-
+        let rollup_account = &mut ctx.accounts.rollup;
         let ticket_account = &mut ctx.accounts.ticket;
+
+        require!(ticket_account.bump == bump, InvalidBump);
+        require!(ticket_account.mint == ctx.accounts.mint.key(), InvalidMint);
+        require!(!ctx.accounts.stake.protected_gids.contains(&ticket_account.gid), ProtectedGid);
+
+        // rollup_account.mints = unwrap_int!(rollup_account.mints.checked_sub(1));
         ticket_account.enrollment_epoch = reset_epoch.to_le_bytes().to_vec();
         emit!(WithdrawEntityEvent {
             smart_wallet: ctx.accounts.smart_wallet.key(),
@@ -459,76 +480,6 @@ pub mod smart_wallet {
         ]];
         do_execute_transaction(ctx, wallet_seeds)
     }
-
-    /// Invokes an arbitrary instruction as a PDA derived from the owner,
-    /// i.e. as an "Owner Invoker".
-    ///
-    /// This is useful for using the multisig as a whitelist or as a council,
-    /// e.g. a whitelist of approved owners.
-    #[access_control(ctx.accounts.validate())]
-    pub fn owner_invoke_instruction(
-        ctx: Context<OwnerInvokeInstruction>,
-        index: u64,
-        bump: u8,
-        ix: TXInstruction,
-    ) -> ProgramResult {
-        let smart_wallet = &ctx.accounts.smart_wallet;
-        // Execute the transaction signed by the smart_wallet.
-        let invoker_seeds: &[&[&[u8]]] = &[&[
-            b"GokiSmartWalletOwnerInvoker" as &[u8],
-            &smart_wallet.key().to_bytes(),
-            &index.to_le_bytes(),
-            &[bump],
-        ]];
-
-        solana_program::program::invoke_signed(
-            &(&ix).into(),
-            ctx.remaining_accounts,
-            invoker_seeds,
-        )?;
-
-        Ok(())
-    }
-
-    /// Creates a struct containing a reverse mapping of a subaccount to a
-    /// [SmartWallet].
-    #[access_control(ctx.accounts.validate())]
-    pub fn create_subaccount_info(
-        ctx: Context<CreateSubaccountInfo>,
-        _bump: u8,
-        subaccount: Pubkey,
-        smart_wallet: Pubkey,
-        index: u64,
-        subaccount_type: SubaccountType,
-    ) -> ProgramResult {
-        let (address, _derived_bump) = match subaccount_type {
-            SubaccountType::Derived => Pubkey::find_program_address(
-                &[
-                    b"GokiSmartWalletDerived" as &[u8],
-                    &smart_wallet.key().to_bytes(),
-                    &index.to_le_bytes(),
-                ],
-                &crate::ID,
-            ),
-            SubaccountType::OwnerInvoker => Pubkey::find_program_address(
-                &[
-                    b"GokiSmartWalletOwnerInvoker" as &[u8],
-                    &smart_wallet.key().to_bytes(),
-                    &index.to_le_bytes(),
-                ],
-                &crate::ID,
-            ),
-        };
-
-        invariant!(address == subaccount, SubaccountOwnerMismatch);
-
-        let info = &mut ctx.accounts.subaccount_info;
-        info.smart_wallet = smart_wallet;
-        info.subaccount_type = subaccount_type;
-        info.index = index;
-
-        Ok(())
-    }
 }
 
 /// Accounts for [smart_wallet::create_smart_wallet].
@@ -557,13 +508,6 @@ pub struct CreateSmartWallet<'info> {
 
     /// The [System] program.
     pub system_program: Program<'info, System>,
-}
-
-/// Accounts for [smart_wallet::set_owners] and [smart_wallet::change_threshold].
-#[derive(Accounts)]
-pub struct Auth<'info> {
-    #[account(mut, signer)]
-    pub smart_wallet: Account<'info, SmartWallet>,
 }
 
 /// Accounts for [smart_wallet:append_transaction].
@@ -690,6 +634,25 @@ pub struct ClaimEntities<'info> {
     pub system_program: Program<'info, System>,
 }
 #[derive(Accounts)]
+#[instruction(bump: u8)]
+pub struct UpdateEntityByOwner<'info> {
+    #[account(mut)]
+    pub smart_wallet: Account<'info, SmartWallet>,
+    #[account(mut)]
+    pub ticket: Account<'info, Ticket>,
+    #[account(mut)]
+    pub rollup: Account<'info, Rollup>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    #[account(mut)]
+    pub mint: UncheckedAccount<'info>,
+    pub mint_ata: UncheckedAccount<'info>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+#[derive(Accounts)]
 #[instruction(bump: u8, timestamp: Vec<u8>)]
 pub struct UpdateEntity<'info> {
     #[account(mut)]
@@ -700,12 +663,30 @@ pub struct UpdateEntity<'info> {
     pub rollup: Account<'info, Rollup>,
     #[account(mut)]
     pub payer: Signer<'info>,
-    pub owner: Signer<'info>,
+    pub smart_wallet_owner: Signer<'info>,
     pub mint: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 /// Accounts for [smart_wallet:append_transaction].
+#[derive(Accounts)]
+#[instruction(bump: u8)]
+pub struct WithdrawEntityByProgram<'info> {
+    #[account(mut)]
+    pub smart_wallet: Account<'info, SmartWallet>,
+    #[account(mut)]
+    pub stake: Account<'info, Stake>,
+    #[account(mut)]
+    pub ticket: Account<'info, Ticket>,
+    #[account(mut)]
+    pub rollup: Account<'info, Rollup>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub owner: UncheckedAccount<'info>,
+    pub smart_wallet_owner: Signer<'info>,
+    pub mint: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
 #[derive(Accounts)]
 #[instruction(bump: u8)]
 pub struct WithdrawEntity<'info> {
@@ -715,6 +696,8 @@ pub struct WithdrawEntity<'info> {
     pub stake: Account<'info, Stake>,
     #[account(mut)]
     pub ticket: Account<'info, Ticket>,
+    #[account(mut)]
+    pub rollup: Account<'info, Rollup>,
     #[account(mut)]
     pub payer: Signer<'info>,
     pub owner: Signer<'info>,
@@ -776,37 +759,6 @@ pub struct ExecuteTransaction<'info> {
     pub owner: Signer<'info>,
 }
 
-/// Accounts for [smart_wallet::owner_invoke_instruction].
-#[derive(Accounts)]
-pub struct OwnerInvokeInstruction<'info> {
-    /// The [SmartWallet].
-    pub smart_wallet: Account<'info, SmartWallet>,
-    /// An owner of the [SmartWallet].
-    pub owner: Signer<'info>,
-}
-
-/// Accounts for [smart_wallet::create_subaccount_info].
-#[derive(Accounts)]
-#[instruction(bump: u8, subaccount: Pubkey)]
-pub struct CreateSubaccountInfo<'info> {
-    /// The [SubaccountInfo] to create.
-    #[account(
-        init,
-        seeds = [
-            b"GokiSubaccountInfo".as_ref(),
-            &subaccount.to_bytes()
-        ],
-        bump = bump,
-        payer = payer
-    )]
-    pub subaccount_info: Account<'info, SubaccountInfo>,
-    /// Payer to create the [SubaccountInfo].
-    #[account(mut)]
-    pub payer: Signer<'info>,
-    /// The [System] program.
-    pub system_program: Program<'info, System>,
-}
-
 fn do_execute_transaction(ctx: Context<ExecuteTransaction>, seeds: &[&[&[u8]]]) -> ProgramResult {
     for ix in ctx.accounts.transaction.instructions.iter() {
         solana_program::program::invoke_signed(&(ix).into(), ctx.remaining_accounts, seeds)?;
@@ -846,8 +798,6 @@ pub enum ErrorCode {
     InvalidThreshold,
     #[msg("Owner set has changed since the creation of the transaction.")]
     OwnerSetChanged,
-    #[msg("Subaccount does not belong to smart wallet.")]
-    SubaccountOwnerMismatch,
     #[msg("Invalid bump seed.")]
     InvalidBump,
     #[msg("Invalid Mint.")]
@@ -860,4 +810,6 @@ pub enum ErrorCode {
     NoGIDJack,
     #[msg("Inconsistent Timestamp.")]
     DisingenuousUpdate,
+    #[msg("Invalid Mint ATA.")]
+    InvalidATA,
 }
