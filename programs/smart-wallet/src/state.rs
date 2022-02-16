@@ -132,13 +132,20 @@ pub struct Ticket {
 }
 
 impl Ticket {
+    // 95 bytes.
     pub fn space() -> usize {
         8 +
+        // 8
             4 + (8 * 1) +
+            // 20
             1 +
+            // 21
             2 +
+            // 23
             4 + 32 +
+            // 41
             4 + 32
+
     }
 }
 
